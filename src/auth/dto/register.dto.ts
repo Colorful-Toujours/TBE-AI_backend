@@ -16,4 +16,5 @@ export class RegisterDto {
   @IsString({ message: '密码必须是字符串' })
   @Length(6, 32, { message: '密码长度必须在 6 到 32 位之间' })
   password: string;
+  
 }
