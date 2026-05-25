@@ -14,13 +14,13 @@ import {
 } from '../common/utils/pagination.util';
 import { newId } from '../common/utils/id.util';
 import { PasswordUtil } from '../common/utils/password.util';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
 import type { CreateUserDto, ListUsersQueryDto, UpdateUserDto } from './dto/user.dto';
 
 @Injectable()
 export class UsersService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma: PrismaClient,
     private readonly passwordUtil: PasswordUtil,
     private readonly auditService: AuditService,
   ) {}

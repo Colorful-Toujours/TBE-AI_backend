@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
 import { toAuditLogRecord } from '../mappers/entity.mapper';
 import type { AuditLogRecord } from '../storage/entities';
 import { newId } from '../utils/id.util';
 
 @Injectable()
 export class AuditService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaClient) {}
 
   async record(
     partial: Omit<AuditLogRecord, 'id' | 'createdAt'> & {

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { IsIn, IsOptional } from 'class-validator';
 import { toBillRecord, toMaterialRecord } from '../common/mappers/entity.mapper';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
 
 export class DashboardRangeQueryDto {
   @IsOptional()
@@ -11,7 +11,7 @@ export class DashboardRangeQueryDto {
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaClient) {}
 
   async summary() {
     const [bills, payments, materials] = await Promise.all([

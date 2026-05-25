@@ -7,7 +7,7 @@ import {
   paginate,
   sortItems,
 } from '../common/utils/pagination.util';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
 import type {
   CreateAuditLogDto,
   ListAuditLogsQueryDto,
@@ -16,7 +16,7 @@ import type {
 @Injectable()
 export class AuditLogsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma: PrismaClient,
     private readonly auditService: AuditService,
   ) {}
 

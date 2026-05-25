@@ -8,7 +8,7 @@ import {
   sortItems,
 } from '../common/utils/pagination.util';
 import { newId } from '../common/utils/id.util';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
 import type {
   CreateMaterialDto,
   ListMaterialsQueryDto,
@@ -18,7 +18,7 @@ import type {
 @Injectable()
 export class MaterialsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma: PrismaClient,
     private readonly auditService: AuditService,
   ) {}
 

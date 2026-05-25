@@ -16,7 +16,7 @@ import type { StoredUser } from '../common/storage/entities';
 import { getPermissionsForRole } from '../common/types/rbac.types';
 import { newId } from '../common/utils/id.util';
 import { PasswordUtil } from '../common/utils/password.util';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
 import type {
   ChangePasswordDto,
   LoginDto,
@@ -37,7 +37,7 @@ const DEV_SMS_CODE = '123456';
 @Injectable()
 export class AuthService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma: PrismaClient,
     private readonly passwordUtil: PasswordUtil,
     private readonly jwtService: JwtService,
     private readonly auditService: AuditService,

@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client';
+import { Prisma } from '@prisma/client';
 import type { JwtPayload } from '../auth/types/jwt-payload.type';
 import { AuditService } from '../common/services/audit.service';
 import { toBillRecord } from '../common/mappers/entity.mapper';
@@ -10,7 +10,7 @@ import {
   sortItems,
 } from '../common/utils/pagination.util';
 import { newId } from '../common/utils/id.util';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
 import type {
   CreateBillDto,
   ListBillsQueryDto,
@@ -20,7 +20,7 @@ import type {
 @Injectable()
 export class BillsService {
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma: PrismaClient,
     private readonly auditService: AuditService,
   ) {}
 

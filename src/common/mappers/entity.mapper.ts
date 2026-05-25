@@ -1,11 +1,5 @@
-import { Prisma } from '../../../generated/prisma/client';
-import type {
-  AuditLog,
-  Bill,
-  Material,
-  Payment,
-  User,
-} from '../../../generated/prisma/client';
+import { Prisma } from '@prisma/client';
+import type { AuditLog, Bill, Material, Payment, User } from '@prisma/client';
 import type {
   AuditLogRecord,
   BillMaterialRecord,

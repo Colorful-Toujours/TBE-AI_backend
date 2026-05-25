@@ -9,7 +9,7 @@ import {
   paginate,
   sortItems,
 } from '../common/utils/pagination.util';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaClient } from '@prisma/client';
 
 export class ListPaymentsQueryDto extends PaginationQueryDto {
   @IsOptional()
@@ -27,7 +27,7 @@ export class ListPaymentsQueryDto extends PaginationQueryDto {
 
 @Injectable()
 export class PaymentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaClient) {}
 
   async list(query: ListPaymentsQueryDto) {
     const payments = (await this.prisma.payment.findMany()).map(
