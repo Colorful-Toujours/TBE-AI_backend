@@ -1,140 +1,340 @@
+import { randomUUID } from 'node:crypto';
 import {
+  BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
+  NotImplementedException,
+  HttpException,
+  HttpStatus,
   UnauthorizedException,
 } from '@nestjs/common';
-import { createHash, randomBytes } from 'node:crypto';
-import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
-import { PublicUser, StoredUser } from './types/auth-user.type';
+import { JwtService } from '@nestjs/jwt';
+import { AuditService } from '../common/services/audit.service';
+import { toStoredUser } from '../common/mappers/entity.mapper';
+import type { StoredUser } from '../common/storage/entities';
+import { getPermissionsForRole } from '../common/types/rbac.types';
+import { newId } from '../common/utils/id.util';
+import { PasswordUtil } from '../common/utils/password.util';
+import { PrismaService } from '../prisma/prisma.service';
+import type {
+  ChangePasswordDto,
+  LoginDto,
+  RegisterDto,
+  SendSmsDto,
+  UpdateProfileDto,
+} from './dto/login.dto';
+import type {
+  AuthTokenResponse,
+  AuthUserResponse,
+  JwtPayload,
+} from './types/jwt-payload.type';
 
-/**
- * AuthService 负责注册、登录以及密码处理。
- *
- * 说明：
- * 1. 当前实现使用内存数组保存用户，服务重启后数据会丢失。
- * 2. 正式项目应替换为数据库，例如 MySQL/PostgreSQL/MongoDB。
- * 3. 当前登录返回的是一个示例 token，正式项目建议改成 JWT 或服务端 session。
- */
+const SMS_COOLDOWN_MS = 60_000;
+const SMS_EXPIRES_MS = 300_000;
+const DEV_SMS_CODE = '123456';
+
 @Injectable()
 export class AuthService {
-  /**
-   * 用内存模拟用户表。
-   *
-   * private readonly 的含义：
-   * - private：只允许 AuthService 内部访问，避免其他模块直接修改用户数据。
-   * - readonly：不能把 users 重新赋值为另一个数组，但仍可以 push 新用户。
-   */
-  private readonly users: StoredUser[] = [];
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly passwordUtil: PasswordUtil,
+    private readonly jwtService: JwtService,
+    private readonly auditService: AuditService,
+  ) {}
 
-  /** 简单递增 ID，模拟数据库自增主键。 */
-  private nextUserId = 1;
-
-  /**
-   * 注册新用户。
-   *
-   * @param dto 注册请求体，包含 username 和 password。
-   * @returns 注册成功后的用户信息，不包含密码哈希和盐。
-   */
-  register(dto: RegisterDto): PublicUser {
-    const normalizedUsername = this.normalizeUsername(dto.username);
-
-    // 用户名唯一性检查；真实项目中应该使用数据库唯一索引兜底。
-    const existedUser = this.findByUsername(normalizedUsername);
-    if (existedUser) {
+  async register(dto: RegisterDto): Promise<AuthTokenResponse> {
+    const phone = dto.username.trim();
+    if (await this.findByPhone(phone)) {
       throw new ConflictException('用户名已存在');
     }
 
-    // 每个用户生成不同的盐，即使两个用户密码相同，哈希结果也不一样。
-    const passwordSalt = randomBytes(16).toString('hex');
-    const passwordHash = this.hashPassword(dto.password, passwordSalt);
+    const passwordFields = this.passwordUtil.createFields(dto.password);
+    const created = await this.prisma.user.create({
+      data: {
+        id: newId('u'),
+        name: phone,
+        phone,
+        role: 'user',
+        status: '启用',
+        ...passwordFields,
+      },
+    });
+    const user = toStoredUser(created);
 
-    const user: StoredUser = {
-      id: this.nextUserId,
-      username: normalizedUsername,
-      passwordSalt,
-      passwordHash,
-      createdAt: new Date(),
-    };
+    await this.auditService.record({
+      action: 'create',
+      module: 'auth',
+      target: '用户注册',
+      detail: `${user.name} 注册成功`,
+      operator: user.name,
+      operatorId: user.id,
+      status: 'success',
+    });
 
-    this.users.push(user);
-    this.nextUserId += 1;
-
-    return this.toPublicUser(user);
+    return this.issueToken(user);
   }
 
-  /**
-   * 登录用户。
-   *
-   * @param dto 登录请求体，包含 username 和 password。
-   * @returns 用户信息和登录 token。
-   */
-  login(dto: LoginDto): { user: PublicUser; token: string } {
-    const normalizedUsername = this.normalizeUsername(dto.username);
+  async login(dto: LoginDto): Promise<AuthTokenResponse> {
+    const account = dto.username.trim();
 
-    const user = this.findByUsername(normalizedUsername);
-    if (!user) {
-      // 不明确提示“用户不存在”还是“密码错误”，可以减少账号枚举风险。
-      throw new UnauthorizedException('用户名或密码错误');
+    if (dto.loginType === 'phone') {
+      return this.loginWithPhone(account, dto.verificationCode);
     }
 
-    const inputPasswordHash = this.hashPassword(
-      dto.password,
-      user.passwordSalt,
+    return this.loginWithPassword(account, dto.password);
+  }
+
+  async sendSms(dto: SendSmsDto) {
+    const phone = dto.phone.trim();
+    const now = Date.now();
+    const latest = await this.prisma.smsCode.findFirst({
+      where: { phone },
+      orderBy: { sentAt: 'desc' },
+    });
+
+    if (latest && now - latest.sentAt.getTime() < SMS_COOLDOWN_MS) {
+      throw new HttpException(
+        '发送过于频繁，请稍后再试',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const code =
+      process.env.NODE_ENV === 'production'
+        ? String(Math.floor(100000 + Math.random() * 900000))
+        : DEV_SMS_CODE;
+
+    await this.prisma.smsCode.create({
+      data: {
+        phone,
+        code,
+        scene: dto.scene,
+        expiresAt: new Date(now + SMS_EXPIRES_MS),
+        sentAt: new Date(now),
+      },
+    });
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.info(`[SMS][${dto.scene}] ${phone} => ${code}`);
+    }
+
+    return { expiresIn: 300, cooldown: 60 };
+  }
+
+  async logout(user: JwtPayload) {
+    await this.prisma.tokenBlacklist.create({
+      data: { jti: user.jti },
+    });
+    await this.auditService.record({
+      action: 'logout',
+      module: 'auth',
+      target: '系统登出',
+      operator: user.name,
+      operatorId: user.sub,
+      status: 'success',
+    });
+  }
+
+  async getMe(user: JwtPayload) {
+    const stored = await this.requireUser(user.sub);
+    return {
+      ...this.toAuthUser(stored),
+      role: stored.role,
+      permissions: getPermissionsForRole(stored.role),
+    };
+  }
+
+  async updateProfile(user: JwtPayload, dto: UpdateProfileDto) {
+    const stored = await this.requireUser(user.sub);
+    if (dto.phone && dto.phone !== stored.phone) {
+      const conflict = await this.findByPhone(dto.phone);
+      if (conflict && conflict.id !== stored.id) {
+        throw new ConflictException('手机号已被使用');
+      }
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: stored.id },
+      data: {
+        phone: dto.phone ?? stored.phone,
+        name: dto.name ?? stored.name,
+        email: dto.email ?? stored.email,
+        avatar: dto.avatar !== undefined ? dto.avatar : stored.avatar,
+      },
+    });
+    const next = toStoredUser(updated);
+
+    await this.auditService.record({
+      action: 'update',
+      module: 'settings',
+      target: '个人资料',
+      operator: next.name,
+      operatorId: next.id,
+      status: 'success',
+    });
+
+    return this.toAuthUser(next);
+  }
+
+  async changePassword(user: JwtPayload, dto: ChangePasswordDto) {
+    const stored = await this.requireUser(user.sub);
+    if (!stored.passwordHash || !stored.passwordSalt) {
+      throw new ForbiddenException('验证码注册用户尚未设置密码');
+    }
+
+    const currentHash = this.passwordUtil.hash(
+      dto.currentPassword,
+      stored.passwordSalt,
     );
-    if (inputPasswordHash !== user.passwordHash) {
+    if (currentHash !== stored.passwordHash) {
+      throw new BadRequestException('当前密码错误');
+    }
+
+    const next = this.passwordUtil.createFields(dto.newPassword);
+    await this.prisma.user.update({
+      where: { id: stored.id },
+      data: next,
+    });
+
+    await this.auditService.record({
+      action: 'update',
+      module: 'settings',
+      target: '修改密码',
+      operator: stored.name,
+      operatorId: stored.id,
+      status: 'success',
+    });
+
+    return { ok: true };
+  }
+
+  wechatCallback(_code: string, _state?: string): AuthTokenResponse {
+    throw new NotImplementedException('微信登录尚未配置');
+  }
+
+  private async loginWithPhone(phone: string, code?: string) {
+    if (!/^1\d{10}$/.test(phone)) {
+      throw new BadRequestException('手机号格式不正确');
+    }
+    if (!code?.trim()) {
+      throw new BadRequestException('请输入验证码');
+    }
+
+    await this.verifySmsCode(phone, code.trim(), 'login');
+
+    let user = await this.findByPhone(phone);
+    if (!user) {
+      const created = await this.prisma.user.create({
+        data: {
+          id: newId('u'),
+          name: phone,
+          phone,
+          role: 'user',
+          status: '启用',
+        },
+      });
+      user = toStoredUser(created);
+    }
+
+    return this.completeLogin(user, 'phone');
+  }
+
+  private async loginWithPassword(account: string, password?: string) {
+    if (!password) {
+      throw new BadRequestException('请输入密码');
+    }
+
+    const row =
+      (await this.prisma.user.findUnique({ where: { phone: account } })) ??
+      (await this.prisma.user.findFirst({
+        where: { email: { equals: account, mode: 'insensitive' } },
+      }));
+
+    if (!row?.passwordHash || !row.passwordSalt) {
       throw new UnauthorizedException('用户名或密码错误');
     }
+
+    const hash = this.passwordUtil.hash(password, row.passwordSalt);
+    if (hash !== row.passwordHash) {
+      throw new UnauthorizedException('用户名或密码错误');
+    }
+
+    return this.completeLogin(toStoredUser(row), 'password');
+  }
+
+  private async completeLogin(
+    user: StoredUser,
+    mode: string,
+  ): Promise<AuthTokenResponse> {
+    if (user.status === '禁用') {
+      throw new ForbiddenException('账号已禁用');
+    }
+
+    await this.auditService.record({
+      action: 'login',
+      module: 'auth',
+      target: '系统登录',
+      detail: `${user.name} 登录成功（${mode}）`,
+      operator: user.name,
+      operatorId: user.id,
+      status: 'success',
+    });
+
+    return this.issueToken(user);
+  }
+
+  private async verifySmsCode(phone: string, code: string, scene: string) {
+    const now = new Date();
+    const record = await this.prisma.smsCode.findFirst({
+      where: {
+        phone,
+        scene,
+        expiresAt: { gte: now },
+        code,
+      },
+      orderBy: { sentAt: 'desc' },
+    });
+
+    if (!record) {
+      throw new UnauthorizedException('验证码无效或已过期');
+    }
+  }
+
+  private issueToken(user: StoredUser): AuthTokenResponse {
+    const payload: JwtPayload = {
+      sub: user.id,
+      role: user.role,
+      name: user.name,
+      jti: randomUUID(),
+    };
 
     return {
-      user: this.toPublicUser(user),
-      token: this.createDemoToken(user),
+      token: this.jwtService.sign(payload),
+      user: this.toAuthUser(user),
     };
   }
 
-  /**
-   * 标准化用户名。
-   *
-   * 当前只做 trim，保留大小写；如果你的业务希望用户名大小写不敏感，
-   * 可以在这里追加 .toLowerCase()。
-   */
-  private normalizeUsername(username: string): string {
-    return typeof username === 'string' ? username.trim() : '';
-  }
-
-  /** 根据用户名查询用户；接入数据库后可以替换为 repository.findOne。 */
-  private findByUsername(username: string): StoredUser | undefined {
-    return this.users.find((user) => user.username === username);
-  }
-
-  /**
-   * 密码哈希。
-   *
-   * 当前使用 sha256(password + salt) 演示“不要保存明文密码”的核心思路。
-   * 正式生产环境建议使用 bcrypt/argon2 这类专门的密码哈希算法。
-   */
-  private hashPassword(password: string, salt: string): string {
-    return createHash('sha256').update(`${password}.${salt}`).digest('hex');
-  }
-
-  /**
-   * 创建演示 token。
-   *
-   * 这个 token 只是为了让前端能完成“登录后拿到凭证”的流程联调，
-   * 不能当作正式鉴权方案。后续建议替换为 @nestjs/jwt 生成的 JWT。
-   */
-  private createDemoToken(user: StoredUser): string {
-    const rawToken = `${user.id}.${user.username}.${Date.now()}`;
-
-    return Buffer.from(rawToken).toString('base64url');
-  }
-
-  /** 把内部用户结构转换成对外安全返回的用户结构。 */
-  private toPublicUser(user: StoredUser): PublicUser {
+  private toAuthUser(user: StoredUser): AuthUserResponse {
     return {
       id: user.id,
-      username: user.username,
-      createdAt: user.createdAt,
+      name: user.name,
+      phone: user.phone,
+      email: user.email,
+      avatar: user.avatar ?? null,
     };
+  }
+
+  private async requireUser(id: string): Promise<StoredUser> {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      throw new UnauthorizedException('用户不存在');
+    }
+    return toStoredUser(user);
+  }
+
+  private async findByPhone(phone: string): Promise<StoredUser | undefined> {
+    const user = await this.prisma.user.findUnique({ where: { phone } });
+    return user ? toStoredUser(user) : undefined;
   }
 }

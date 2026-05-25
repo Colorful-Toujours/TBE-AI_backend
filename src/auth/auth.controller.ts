@@ -1,50 +1,88 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { Public } from '../common/decorators/public.decorator';
+import { SkipWrap } from '../common/decorators/skip-wrap.decorator';
 import { AuthService } from './auth.service';
-import type { LoginDto } from './dto/login.dto';
-import type { RegisterDto } from './dto/register.dto';
-import type { PublicUser } from './types/auth-user.type';
+import {
+  ChangePasswordDto,
+  LoginDto,
+  RegisterDto,
+  SendSmsDto,
+  UpdateProfileDto,
+} from './dto/login.dto';
+import type { JwtPayload } from './types/jwt-payload.type';
 
-/**
- * 认证接口控制器。
- *
- * @Controller('auth') 表示当前控制器下所有接口都会带上 /auth 前缀。
- * 例如 register 方法上的 @Post('register') 最终路径就是 POST /auth/register。
- */
+@ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  /**
-   * Nest 会通过依赖注入把 AuthService 实例传进来。
-   * 控制器只负责接收 HTTP 请求，具体业务逻辑放在 service 中，职责更清晰。
-   */
   constructor(private readonly authService: AuthService) {}
 
-  /**
-   * 注册接口。
-   *
-   * 请求示例：
-   * POST /auth/register
-   * {
-   *   "username": "test_user",
-   *   "password": "123456"
-   * }
-   */
+  @Public()
+  @SkipWrap()
+  @HttpCode(200)
   @Post('register')
-  register(@Body() registerDto: RegisterDto): PublicUser {
-    return this.authService.register(registerDto);
+  register(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
   }
 
-  /**
-   * 登录接口。
-   *
-   * 请求示例：
-   * POST /auth/login
-   * {
-   *   "username": "test_user",
-   *   "password": "123456"
-   * }
-   */
+  @Public()
+  @SkipWrap()
+  @HttpCode(200)
   @Post('login')
-  login(@Body() loginDto: LoginDto): { user: PublicUser; token: string } {
-    return this.authService.login(loginDto);
+  login(@Body() dto: LoginDto) {
+    return this.authService.login(dto);
+  }
+
+  @Public()
+  @Post('sms/send')
+  sendSms(@Body() dto: SendSmsDto) {
+    return this.authService.sendSms(dto);
+  }
+
+  @Public()
+  @SkipWrap()
+  @Get('wechat/callback')
+  wechatCallback(@Query('code') code: string, @Query('state') state?: string) {
+    return this.authService.wechatCallback(code, state);
+  }
+
+  @ApiBearerAuth('access-token')
+  @Post('logout')
+  @HttpCode(204)
+  logout(@CurrentUser() user: JwtPayload) {
+    this.authService.logout(user);
+  }
+
+  @ApiBearerAuth('access-token')
+  @Get('me')
+  me(@CurrentUser() user: JwtPayload) {
+    return this.authService.getMe(user);
+  }
+
+  @ApiBearerAuth('access-token')
+  @Patch('profile')
+  updateProfile(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    return this.authService.updateProfile(user, dto);
+  }
+
+  @ApiBearerAuth('access-token')
+  @Patch('password')
+  changePassword(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(user, dto);
   }
 }

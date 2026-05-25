@@ -1,0 +1,44 @@
+# AI Ledger API 本地测试（VS Code / Cursor REST Client 扩展）
+# 安装扩展：REST Client (humao.rest-client)
+# 点击请求上方的 "Send Request" 即可发送
+
+@baseUrl = http://localhost:8888
+@token =
+
+### 健康检查
+GET {{baseUrl}}/health
+
+### 密码登录（演示账号）
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "username": "13800001001",
+  "loginType": "password",
+  "password": "demo123"
+}
+
+### 当前用户（需先登录，token 自动取自上一步）
+@token = {{login.response.body.token}}
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{token}}
+
+### 用户列表
+GET {{baseUrl}}/users?page=1&pageSize=10
+Authorization: Bearer {{token}}
+
+### 材料列表
+GET {{baseUrl}}/materials?page=1&pageSize=10
+Authorization: Bearer {{token}}
+
+### 账单列表
+GET {{baseUrl}}/bills?page=1&pageSize=10
+Authorization: Bearer {{token}}
+
+### 仪表盘汇总
+GET {{baseUrl}}/dashboard/summary
+Authorization: Bearer {{token}}
+
+### 角色列表（无需 token）
+GET {{baseUrl}}/roles
